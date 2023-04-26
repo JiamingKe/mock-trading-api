@@ -3,9 +3,12 @@ package config
 type Config struct {
 	Bybit                   *BybitConfig    `yaml:"bybit"`
 	TimeRange               TimeRangeConfig `yaml:"time_range"`
+	Fee                     float64         `yaml:"fee"`
 	WebSocketKlinePath      string          `yaml:"ws_kline_path"`
 	WebSocketKlineLatencyMs int             `yaml:"ws_kline_latency_ms"`
-	PlaceOrderPath          string          `yaml:"place_order_path"`
+	WebSocketPrivatePath    string          `yaml:"ws_private_path"`
+	CreateOrderPath         string          `yaml:"create_order_path"`
+	SetTradingStopPath      string          `yaml:"set_trading_stop_path"`
 	Port                    int             `yaml:"port"`
 }
 

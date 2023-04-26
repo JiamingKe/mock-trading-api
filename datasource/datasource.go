@@ -3,7 +3,7 @@ package datasource
 type Datasource interface {
 	HasNext() bool
 	Next() KlineItem
-	Current() KlineItem
+	Get() KlineItem
 }
 
 type KlineItem struct {

@@ -39,13 +39,15 @@ func main() {
 		return
 	}
 
-	handler := handler.NewBybit(*cfg.Bybit, cfg.TimeRange, cfg.WebSocketKlineLatencyMs)
+	handler := handler.NewBybit(*cfg.Bybit, cfg.TimeRange, cfg.Fee, cfg.WebSocketKlineLatencyMs)
 
 	// Serve requests
 	r := mux.NewRouter()
 
 	r.HandleFunc(cfg.WebSocketKlinePath, handler.HandleWebSocketKline)
-	r.HandleFunc(cfg.PlaceOrderPath, handler.HandlePlaceOrder).Methods(http.MethodPost)
+	r.HandleFunc(cfg.WebSocketPrivatePath, handler.HandleWebSocketPrivate)
+	r.HandleFunc(cfg.CreateOrderPath, handler.HandleCreateOrder).Methods(http.MethodPost)
+	r.HandleFunc(cfg.SetTradingStopPath, handler.HandleSetTradingStop).Methods(http.MethodPost)
 
 	// Start HTTP server
 	address := fmt.Sprintf(":%d", cfg.Port)

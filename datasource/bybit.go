@@ -10,78 +10,70 @@ import (
 )
 
 func NewBybit(cfg config.BybitConfig, timeRangeCfg config.TimeRangeConfig) Datasource {
-	return &bybitDatasource{
+	datasource := &bybitDatasource{
 		client:          *bybit.NewClient().WithBaseURL(cfg.API.Url).WithAuth(cfg.API.Key, cfg.API.Secret),
 		klineConfig:     cfg.Kline,
-		startTimeMs:     timeRangeCfg.StartTimeMs,
-		endTimeMs:       timeRangeCfg.EndTimeMs,
-		nextStartTimeMs: timeRangeCfg.StartTimeMs,
+		timeRangeConfig: timeRangeCfg,
+		klineItems:      make([]KlineItem, 0),
+		klineIndex:      0,
 	}
+
+	datasource.loadKlineData()
+	return datasource
 }
 
 type bybitDatasource struct {
 	client          bybit.Client
 	klineConfig     config.BybitKline
-	startTimeMs     int
-	endTimeMs       int
-	nextStartTimeMs int
-	data            []KlineItem
-	index           int
+	timeRangeConfig config.TimeRangeConfig
+
+	klineItems []KlineItem
+	klineIndex int
 }
 
-func (b *bybitDatasource) HasNext() bool {
-	if !b.hasNext() {
-		b.prepareData()
-	}
-
-	return b.hasNext()
+func (b bybitDatasource) HasNext() bool {
+	return b.klineIndex < len(b.klineItems)
 }
 
 func (b *bybitDatasource) Next() KlineItem {
 	defer func() {
-		b.index++
+		b.klineIndex++
 	}()
 
-	return b.Current()
+	return b.Get()
 }
 
-func (b bybitDatasource) Current() KlineItem {
-	return b.data[b.index]
+func (b *bybitDatasource) Get() KlineItem {
+	return b.klineItems[b.klineIndex]
 }
 
-func (b bybitDatasource) hasNext() bool {
-	return b.index < len(b.data)
-}
+func (b *bybitDatasource) loadKlineData() {
+	log.Println("loading kline data...")
 
-func (b *bybitDatasource) prepareData() {
-	b.index = 0
+	nextStartTimeMs := b.timeRangeConfig.StartTimeMs
+	endTimeMs := b.timeRangeConfig.EndTimeMs
 
-	if b.nextStartTimeMs > b.endTimeMs {
-		b.data = nil
-		return
+	for nextStartTimeMs < endTimeMs {
+		klineItems, err := b.getKline(nextStartTimeMs, endTimeMs)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		if len(klineItems) == 0 {
+			break
+		}
+
+		lastStart, err := strconv.ParseInt(klineItems[len(klineItems)-1].StartTime, 10, 64)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		b.klineItems = append(b.klineItems, klineItems...)
+		nextStartTimeMs = int(lastStart) + +int(time.Second/time.Millisecond)
 	}
 
-	klineItems, err := b.getKline(b.nextStartTimeMs, b.endTimeMs)
-	if err != nil {
-		log.Println(err)
-		b.data = nil
-		return
-	}
-
-	if len(klineItems) == 0 {
-		b.data = nil
-		return
-	}
-
-	lastStart, err := strconv.ParseInt(klineItems[len(klineItems)-1].StartTime, 10, 64)
-	if err != nil {
-		log.Println(err)
-		b.data = nil
-		return
-	}
-
-	b.data = klineItems
-	b.nextStartTimeMs = int(lastStart) + int(time.Second/time.Millisecond)
 }
 
 func (b bybitDatasource) getKline(startTimeMs, endTimeMs int) ([]KlineItem, error) {

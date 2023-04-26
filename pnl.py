@@ -6,7 +6,7 @@ entry = 0
 win_count = 0
 total_count = 0
 
-current_cost = 0
+prev_cost = 0
 total_cost = 0
 
 total_trading_volume = 0
@@ -26,25 +26,29 @@ with open('orders.json', 'r') as f:
             price = float(data['price'])
             cost = float(data['cost'])
 
+            total_cost += cost
+            total_trading_volume += price * qty
+
+            
             if position == 0:
-                if side == "Buy":
+                # no opened position
+                if side == "0":
                     position = 1
                 else:
                     position = -1
                 
-                current_cost = cost
+                prev_cost = cost
                 entry = price
+                
             else:
-                total_trading_volume += entry * qty
-                currentPnl = position * ( price - entry ) * qty - current_cost
-                total_cost += current_cost
+                current_pnl = position * ( price - entry ) * qty - prev_cost - cost
 
-                print(f"PnL($): {currentPnl}")
+                print(f"PnL($): {current_pnl}")
                 
                 total_count += 1
-                if currentPnl > 0:
+                if current_pnl > 0:
                     win_count += 1
-                total_pnl += currentPnl
+                total_pnl += current_pnl
 
                 position = 0
         except json.JSONDecodeError as e:
