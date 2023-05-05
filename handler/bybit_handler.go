@@ -17,7 +17,7 @@ import (
 	"github.com/sdcoffey/big"
 )
 
-func NewBybit(bybitCfg config.BybitConfig, timeRangeCfg config.TimeRangeConfig, fee float64, wsKlineLatencyMs int) Handler {
+func NewBybit(bybitCfg config.BybitConfig, timeRangeCfg config.TimeRangeConfig, fee float64) Handler {
 	return &bybitHandler{
 		ds:         datasource.NewBybit(bybitCfg, timeRangeCfg),
 		record:     techan.NewTradingRecord(),
@@ -26,9 +26,9 @@ func NewBybit(bybitCfg config.BybitConfig, timeRangeCfg config.TimeRangeConfig, 
 		takeProfit: big.ZERO,
 		stopLoss:   big.ZERO,
 
-		interval:  bybitCfg.Kline.Interval,
-		symbol:    bybitCfg.Kline.Symbol,
-		latencyMs: wsKlineLatencyMs,
+		interval: bybitCfg.Kline.Interval,
+		symbol:   bybitCfg.Kline.Symbol,
+		orders:   make([]string, 0),
 	}
 }
 
@@ -40,9 +40,9 @@ type bybitHandler struct {
 	takeProfit big.Decimal
 	stopLoss   big.Decimal
 
-	interval  string
-	symbol    string
-	latencyMs int
+	interval string
+	symbol   string
+	orders   []string
 }
 
 var upgrader = websocket.Upgrader{
@@ -59,56 +59,45 @@ func (h *bybitHandler) HandleWebSocketKline(w http.ResponseWriter, r *http.Reque
 	}
 	defer conn.Close()
 
-	messageChan := make(chan int) // Channel to receive WebSocket messages
+	conn.SetPingHandler(func(appData string) error {
+		err := conn.WriteMessage(websocket.PongMessage, nil)
+		if err != nil {
+			log.Println("Failed to send pong message:", err)
+		}
 
-	// Goroutine to read WebSocket messages
+		return nil
+	})
+
 	go func() {
 		for {
-			messageType, _, err := conn.ReadMessage()
+			_, _, err := conn.ReadMessage()
 			if err != nil {
-				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-					// Handle normal closure or going away
-					close(messageChan) // Close the messageChan when the WebSocket is closed
-					return
-				} else {
-					// Handle other errors
-					log.Println("Failed to read WebSocket message:", err)
-					close(messageChan) // Close the messageChan when an error occurs
-					return
-				}
+				log.Println("Failed to read incoming message:", err)
+				conn.Close()
+				return
 			}
-			messageChan <- messageType // Send the messageType to the messageChan
 		}
 	}()
 
-	delay := time.Duration(int(h.latencyMs)) * time.Millisecond
-	ticker := time.NewTicker(delay)
+	ticker := time.NewTicker(25 * time.Millisecond)
 
 	for {
-		select {
-		case messageType, ok := <-messageChan:
-			if !ok {
-				// messageChan is closed, indicating the WebSocket is closed or an error occurred
-				os.Exit(0)
-			}
-			// Process the WebSocket message
-			switch messageType {
-			case websocket.CloseMessage:
-				os.Exit(0)
-			case websocket.PingMessage:
-				conn.WriteMessage(websocket.PongMessage, nil)
+		<-ticker.C
+
+		if !h.ds.HasNext() {
+			for _, s := range h.orders {
+				fmt.Println(s)
 			}
 
-		case <-ticker.C:
-			if !h.ds.HasNext() {
-				os.Exit(0)
-			}
-
-			h.fillPositionWithSLTP()
-			time.Sleep(delay)
-
-			h.websocketWriteKline(conn)
+			os.Exit(0)
 		}
+
+		h.fillPositionWithSLTP()
+
+		// some buffer time for the updated position to reach the client side
+		time.Sleep(3 * time.Millisecond)
+
+		h.websocketWriteKline(conn)
 	}
 }
 
@@ -126,15 +115,15 @@ func (h *bybitHandler) fillPositionWithSLTP() {
 
 		if position.IsLong() {
 			if high.GTE(h.takeProfit) {
-				h.createOrder(techan.SELL, high, position.EntranceOrder().Amount, big.ZERO, big.ZERO)
+				h.createOrder(techan.SELL, h.takeProfit, position.EntranceOrder().Amount, big.ZERO, big.ZERO)
 			} else if low.LTE(h.stopLoss) {
-				h.createOrder(techan.SELL, low, position.EntranceOrder().Amount, big.ZERO, big.ZERO)
+				h.createOrder(techan.SELL, h.stopLoss, position.EntranceOrder().Amount, big.ZERO, big.ZERO)
 			}
 		} else if position.IsShort() {
 			if low.LTE(h.takeProfit) {
-				h.createOrder(techan.BUY, low, position.EntranceOrder().Amount, big.ZERO, big.ZERO)
+				h.createOrder(techan.BUY, h.takeProfit, position.EntranceOrder().Amount, big.ZERO, big.ZERO)
 			} else if high.GTE(h.stopLoss) {
-				h.createOrder(techan.BUY, high, position.EntranceOrder().Amount, big.ZERO, big.ZERO)
+				h.createOrder(techan.BUY, h.stopLoss, position.EntranceOrder().Amount, big.ZERO, big.ZERO)
 			}
 		}
 	}
@@ -174,6 +163,7 @@ func (h *bybitHandler) websocketWriteKline(conn *websocket.Conn) {
 	err = conn.WriteMessage(websocket.TextMessage, bytes)
 	if err != nil {
 		log.Println("failed to write message to WebSocket:", err)
+		os.Exit(1)
 	}
 
 }
@@ -207,46 +197,31 @@ func (h *bybitHandler) HandleWebSocketPrivate(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	messageChan := make(chan int) // Channel to receive WebSocket messages
-
-	// Goroutine to read WebSocket messages
 	go func() {
 		for {
-			messageType, _, err := conn.ReadMessage()
+			_, p, err := conn.ReadMessage()
 			if err != nil {
-				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-					// Handle normal closure or going away
-					close(messageChan) // Close the messageChan when the WebSocket is closed
-					return
-				} else {
-					// Handle other errors
-					log.Println("Failed to read WebSocket message:", err)
-					close(messageChan) // Close the messageChan when an error occurs
+				log.Println("Failed to read incoming message:", err)
+				conn.Close()
+				os.Exit(1)
+				return
+			}
+
+			if string(p) == `{"op":"ping"}` {
+				err := conn.WriteMessage(websocket.PongMessage, nil)
+				if err != nil {
+					log.Println("Failed to send pong message:", err)
+					conn.Close()
+					os.Exit(1)
 					return
 				}
 			}
-			messageChan <- messageType // Send the messageType to the messageChan
 		}
 	}()
 
 	for {
-		select {
-		case messageType, ok := <-messageChan:
-			if !ok {
-				// messageChan is closed, indicating the WebSocket is closed or an error occurred
-				os.Exit(0)
-			}
-			// Process the WebSocket message
-			switch messageType {
-			case websocket.CloseMessage:
-				os.Exit(0)
-			case websocket.PingMessage:
-				conn.WriteMessage(websocket.PongMessage, nil)
-			}
-
-		case <-h.newRecord:
-			h.websocketWritePosition(conn)
-		}
+		<-h.newRecord
+		h.websocketWritePosition(conn)
 	}
 }
 
@@ -298,6 +273,7 @@ func (h *bybitHandler) websocketWritePosition(conn *websocket.Conn) {
 	err = conn.WriteMessage(websocket.TextMessage, bytes)
 	if err != nil {
 		log.Println("failed to write message to WebSocket:", err)
+		os.Exit(1)
 	}
 
 }
@@ -337,7 +313,7 @@ func (h *bybitHandler) createOrder(side techan.OrderSide, entryPrice, qty, takeP
 	executionTime := time.UnixMilli(t)
 
 	// write to orders.json
-	fmt.Printf("{\"side\": \"%+v\", \"qty\":\"%s\", \"cost\":\"%s\", \"timestamp\": \"%s\", \"price\":\"%s\", \"takeProfit\": \"%s\", \"stopLoss\": \"%s\"}\n", side, qty, cost, executionTime, entryPrice, takeProfit, stopLoss)
+	h.orders = append(h.orders, fmt.Sprintf("{\"side\": \"%+v\", \"qty\":\"%s\", \"cost\":\"%s\", \"timestamp\": \"%s\", \"price\":\"%s\", \"takeProfit\": \"%s\", \"stopLoss\": \"%s\"}", side, qty, cost, executionTime, entryPrice, takeProfit, stopLoss))
 
 	order := techan.Order{
 		Security:      "Linear.BTC/USDT",

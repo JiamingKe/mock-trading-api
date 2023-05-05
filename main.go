@@ -39,7 +39,7 @@ func main() {
 		return
 	}
 
-	handler := handler.NewBybit(*cfg.Bybit, cfg.TimeRange, cfg.Fee, cfg.WebSocketKlineLatencyMs)
+	handler := handler.NewBybit(*cfg.Bybit, cfg.TimeRange, cfg.Fee)
 
 	// Serve requests
 	r := mux.NewRouter()
